@@ -27,9 +27,13 @@ pub enum ExecuteMsg {
     /// Swap an offer asset to the other
     Swap {
         offer_asset: Asset,
-        belief_price: Option<Decimal>,
-        max_spread: Option<Decimal>,
+        min_out_amount: Uint128,
         to: Option<String>,
+    },
+    WithdrawSingleLiquidity {
+        asset: Asset,
+        unmint_amount: u128,
+        min_out_amount: u128,
     },
 }
 
@@ -38,8 +42,7 @@ pub enum ExecuteMsg {
 pub enum Cw20HookMsg {
     /// Sell a given amount of asset
     Swap {
-        belief_price: Option<Decimal>,
-        max_spread: Option<Decimal>,
+        min_out_amount: Uint128,
         to: Option<String>,
     },
     WithdrawLiquidity {},
@@ -65,16 +68,12 @@ pub struct PoolResponse {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct SimulationResponse {
     pub return_amount: Uint128,
-    pub spread_amount: Uint128,
-    pub commission_amount: Uint128,
 }
 
 /// ReverseSimulationResponse returns reverse swap simulation response
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ReverseSimulationResponse {
     pub offer_amount: Uint128,
-    pub spread_amount: Uint128,
-    pub commission_amount: Uint128,
 }
 
 /// We currently take no arguments for migrations
