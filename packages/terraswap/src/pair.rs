@@ -9,7 +9,9 @@ use cw20::Cw20ReceiveMsg;
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
     /// Asset infos
-    pub asset_infos: [AssetInfo; 2],
+    pub asset_infos: Vec<AssetInfo>,
+    pub amplification: Uint128,
+    pub fee: Uint128,
     /// Token contract code id for initialization
     pub token_code_id: u64,
 }
@@ -20,20 +22,16 @@ pub enum ExecuteMsg {
     Receive(Cw20ReceiveMsg),
     /// ProvideLiquidity a user provides pool liquidity
     ProvideLiquidity {
-        assets: [Asset; 2],
-        slippage_tolerance: Option<Decimal>,
+        assets: Vec<Asset>,
+        min_out_amount: Uint128,
         receiver: Option<String>,
     },
     /// Swap an offer asset to the other
     Swap {
         offer_asset: Asset,
+        ask_asset: Asset,
         min_out_amount: Uint128,
         to: Option<String>,
-    },
-    WithdrawSingleLiquidity {
-        asset: Asset,
-        unmint_amount: u128,
-        min_out_amount: u128,
     },
 }
 
@@ -42,8 +40,13 @@ pub enum ExecuteMsg {
 pub enum Cw20HookMsg {
     /// Sell a given amount of asset
     Swap {
+        ask_asset: Asset,
         min_out_amount: Uint128,
         to: Option<String>,
+    },
+    WithdrawSingleLiquidity {
+        asset: Asset,
+        min_out_amount: Uint128,
     },
     WithdrawLiquidity {},
 }
@@ -53,14 +56,14 @@ pub enum Cw20HookMsg {
 pub enum QueryMsg {
     Pair {},
     Pool {},
-    Simulation { offer_asset: Asset },
-    ReverseSimulation { ask_asset: Asset },
+    // Simulation { offer_asset: Asset },
+    // ReverseSimulation { ask_asset: Asset },
 }
 
 // We define a custom struct for each query response
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct PoolResponse {
-    pub assets: [Asset; 2],
+    pub assets: Vec<Asset>,
     pub total_share: Uint128,
 }
 

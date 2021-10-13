@@ -1,88 +1,35 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "QueryMsg",
-  "anyOf": [
-    {
-      "type": "object",
-      "required": [
-        "pair"
-      ],
-      "properties": {
-        "pair": {
-          "type": "object"
-        }
-      },
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "required": [
-        "pool"
-      ],
-      "properties": {
-        "pool": {
-          "type": "object"
-        }
-      },
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "required": [
-        "simulation"
-      ],
-      "properties": {
-        "simulation": {
-          "type": "object",
-          "required": [
-            "offer_asset"
-          ],
-          "properties": {
-            "offer_asset": {
-              "$ref": "#/definitions/Asset"
-            }
-          }
-        }
-      },
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "required": [
-        "reverse_simulation"
-      ],
-      "properties": {
-        "reverse_simulation": {
-          "type": "object",
-          "required": [
-            "ask_asset"
-          ],
-          "properties": {
-            "ask_asset": {
-              "$ref": "#/definitions/Asset"
-            }
-          }
-        }
-      },
-      "additionalProperties": false
-    }
+  "title": "InstantiateMsg",
+  "type": "object",
+  "required": [
+    "amplification",
+    "asset_infos",
+    "fee",
+    "token_code_id"
   ],
-  "definitions": {
-    "Asset": {
-      "type": "object",
-      "required": [
-        "amount",
-        "info"
-      ],
-      "properties": {
-        "amount": {
-          "$ref": "#/definitions/Uint128"
-        },
-        "info": {
-          "$ref": "#/definitions/AssetInfo"
-        }
+  "properties": {
+    "amplification": {
+      "$ref": "#/definitions/Uint128"
+    },
+    "asset_infos": {
+      "description": "Asset infos",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AssetInfo"
       }
     },
+    "fee": {
+      "$ref": "#/definitions/Uint128"
+    },
+    "token_code_id": {
+      "description": "Token contract code id for initialization",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    }
+  },
+  "definitions": {
     "AssetInfo": {
       "description": "AssetInfo contract_addr is usually passed from the cw20 hook so we can trust the contract_addr is properly validated.",
       "anyOf": [

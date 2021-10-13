@@ -1,9 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 1023993867f17acff28867680df651e4bfef8d2b24620173726754bc5c972d00 # shrinks to i = 0, amount_a = 1, amount_b = 1000, amount_c = 1, amount_d = 1, in_amount = 990
-cc 6227b2e8842109dc1046f355a2aaa2f50d859a1b582c3350123b1f17d754e795 # shrinks to old_balances = [100, 100, 100, 100], unmint_amount = 100, lp_token_total = 100, n_coins = 2, amplification_coefficient = 1
-cc 15dd9bf785871b3bda3a49fad26cc5f1801c7fde40a147e30e53f36ecc39b24b # shrinks to balances = [100, 774102821479457, 100, 100], i = 1, j = 2, in_amount = 100, n_coins = 3, amplification_coefficient = 1

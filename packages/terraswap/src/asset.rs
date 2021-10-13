@@ -270,27 +270,34 @@ impl AssetInfoRaw {
 // We define a custom struct for each query response
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct PairInfo {
-    pub asset_infos: [AssetInfo; 2],
+    pub asset_infos: Vec<AssetInfo>,
     pub contract_addr: String,
     pub liquidity_token: String,
+    pub amplification: Uint128,
+    pub fee: Uint128,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct PairInfoRaw {
-    pub asset_infos: [AssetInfoRaw; 2],
-    pub contract_addr: CanonicalAddr,
+    pub asset_infos: Vec<AssetInfoRaw>,
     pub liquidity_token: CanonicalAddr,
+    pub contract_addr: CanonicalAddr,
+    pub amplification: Uint128,
+    pub fee: Uint128,
 }
 
 impl PairInfoRaw {
     pub fn to_normal(&self, api: &dyn Api) -> StdResult<PairInfo> {
+        let mut asset_infos = vec![];
+        for asset in self.asset_infos.iter() {
+            asset_infos.push(asset.to_normal(api)?);
+        }
         Ok(PairInfo {
             liquidity_token: api.addr_humanize(&self.liquidity_token)?.to_string(),
             contract_addr: api.addr_humanize(&self.contract_addr)?.to_string(),
-            asset_infos: [
-                self.asset_infos[0].to_normal(api)?,
-                self.asset_infos[1].to_normal(api)?,
-            ],
+            asset_infos: asset_infos,
+            amplification: self.amplification,
+            fee: self.fee,
         })
     }
 
@@ -299,18 +306,16 @@ impl PairInfoRaw {
         querier: &QuerierWrapper,
         api: &dyn Api,
         contract_addr: Addr,
-    ) -> StdResult<[Asset; 2]> {
-        let info_0: AssetInfo = self.asset_infos[0].to_normal(api)?;
-        let info_1: AssetInfo = self.asset_infos[1].to_normal(api)?;
-        Ok([
-            Asset {
-                amount: info_0.query_pool(querier, api, contract_addr.clone())?,
-                info: info_0,
-            },
-            Asset {
-                amount: info_1.query_pool(querier, api, contract_addr)?,
-                info: info_1,
-            },
-        ])
+    ) -> StdResult<Vec<Asset>> {
+        let mut asset_infos = vec![];
+        for asset in self.asset_infos.iter() {
+            let info = asset.to_normal(api)?;
+            asset_infos.push(Asset {
+                amount: info.query_pool(querier, api, contract_addr.clone())?,
+                info: info,
+            });
+        }
+
+        Ok(asset_infos)
     }
 }

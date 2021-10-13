@@ -1,5 +1,5 @@
 [package]
-name = "terraswap-stable-swap"
+name = "terraswap-stable"
 version = "0.0.0"
 authors = ["Mercurial"]
 edition = "2018"
@@ -45,7 +45,6 @@ thiserror = { version = "1.0.20" }
 protobuf = { version = "2", features = ["with-bytes"] }
 cosmwasm-bignumber = "2.2.0"
 terraswap = { path = "../../packages/terraswap", default-features = false, version = "2.4.1"}
-mercurial_curve = { path = "../curve"}
 
 [dev-dependencies]
 cosmwasm-schema = "0.16.0"

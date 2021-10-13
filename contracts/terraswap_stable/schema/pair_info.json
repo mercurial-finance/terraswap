@@ -1,40 +1,35 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "PoolResponse",
+  "title": "PairInfo",
   "type": "object",
   "required": [
-    "assets",
-    "total_share"
+    "amplification",
+    "asset_infos",
+    "contract_addr",
+    "fee",
+    "liquidity_token"
   ],
   "properties": {
-    "assets": {
+    "amplification": {
+      "$ref": "#/definitions/Uint128"
+    },
+    "asset_infos": {
       "type": "array",
       "items": {
-        "$ref": "#/definitions/Asset"
-      },
-      "maxItems": 2,
-      "minItems": 2
+        "$ref": "#/definitions/AssetInfo"
+      }
     },
-    "total_share": {
+    "contract_addr": {
+      "type": "string"
+    },
+    "fee": {
       "$ref": "#/definitions/Uint128"
+    },
+    "liquidity_token": {
+      "type": "string"
     }
   },
   "definitions": {
-    "Asset": {
-      "type": "object",
-      "required": [
-        "amount",
-        "info"
-      ],
-      "properties": {
-        "amount": {
-          "$ref": "#/definitions/Uint128"
-        },
-        "info": {
-          "$ref": "#/definitions/AssetInfo"
-        }
-      }
-    },
     "AssetInfo": {
       "description": "AssetInfo contract_addr is usually passed from the cw20 hook so we can trust the contract_addr is properly validated.",
       "anyOf": [

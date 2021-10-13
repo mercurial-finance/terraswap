@@ -10,7 +10,7 @@ use cosmwasm_std::{
     Env, MessageInfo, Reply, ReplyOn, Response, StdError, StdResult, SubMsg, Uint128, WasmMsg,
 };
 
-use mercurial_curve::curve::Curve;
+use crate::curve::Curve;
 
 use cosmwasm_bignumber::{Decimal256, Uint256};
 use cw20::{Cw20ExecuteMsg, Cw20ReceiveMsg, MinterResponse};
@@ -28,8 +28,8 @@ use terraswap::token::InstantiateMsg as TokenInstantiateMsg;
 const INSTANTIATE_REPLY_ID: u64 = 1;
 
 /// Commission rate == 0.3%
-const AMPLIFICATION: u64 = 60;
-const FEE_NUMERATOR: u64 = 4;
+// const AMPLIFICATION: u64 = 60;
+// const FEE_NUMERATOR: u64 = 4;
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
     deps: DepsMut,
@@ -37,13 +37,16 @@ pub fn instantiate(
     _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> StdResult<Response> {
+    let mut asset_infos = vec![];
+    for asset in msg.asset_infos.iter() {
+        asset_infos.push(asset.to_raw(deps.api)?);
+    }
     let pair_info: &PairInfoRaw = &PairInfoRaw {
         contract_addr: deps.api.addr_canonicalize(env.contract.address.as_str())?,
         liquidity_token: CanonicalAddr::from(vec![]),
-        asset_infos: [
-            msg.asset_infos[0].to_raw(deps.api)?,
-            msg.asset_infos[1].to_raw(deps.api)?,
-        ],
+        asset_infos: asset_infos,
+        amplification: msg.amplification,
+        fee: msg.fee,
     };
 
     PAIR_INFO.save(deps.storage, pair_info)?;
@@ -82,18 +85,19 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
     match msg {
         ExecuteMsg::Receive(msg) => receive_cw20(deps, env, info, msg),
-        ExecuteMsg::WithdrawSingleLiquidity {
-            asset,
-            unmint_amount,
-            min_out_amount,
-        } => withdraw_single_liquidity(deps, env, info, asset, unmint_amount, min_out_amount),
+        // ExecuteMsg::WithdrawSingleLiquidity {
+        //     asset,
+        //     unmint_amount,
+        //     min_out_amount,
+        // } => withdraw_single_liquidity(deps, env, info, asset, unmint_amount, min_out_amount),
         ExecuteMsg::ProvideLiquidity {
             assets,
-            slippage_tolerance,
+            min_out_amount,
             receiver,
-        } => provide_liquidity(deps, env, info, assets, slippage_tolerance, receiver),
+        } => provide_liquidity(deps, env, info, assets, min_out_amount, receiver),
         ExecuteMsg::Swap {
             offer_asset,
+            ask_asset,
             min_out_amount,
             to,
         } => {
@@ -113,6 +117,7 @@ pub fn execute(
                 info.clone(),
                 info.sender,
                 offer_asset,
+                ask_asset,
                 min_out_amount,
                 to_addr,
             )
@@ -129,11 +134,15 @@ pub fn receive_cw20(
     let contract_addr = info.sender.clone();
 
     match from_binary(&cw20_msg.msg) {
-        Ok(Cw20HookMsg::Swap { min_out_amount, to }) => {
+        Ok(Cw20HookMsg::Swap {
+            ask_asset,
+            min_out_amount,
+            to,
+        }) => {
             // only asset contract can execute this message
             let mut authorized: bool = false;
             let config: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
-            let pools: [Asset; 2] =
+            let pools: Vec<Asset> =
                 config.query_pools(&deps.querier, deps.api, env.contract.address.clone())?;
             for pool in pools.iter() {
                 if let AssetInfo::Token { contract_addr, .. } = &pool.info {
@@ -164,9 +173,20 @@ pub fn receive_cw20(
                     },
                     amount: cw20_msg.amount,
                 },
+                ask_asset,
                 min_out_amount,
                 to_addr,
             )
+        }
+        Ok(Cw20HookMsg::WithdrawSingleLiquidity {
+            asset,
+            min_out_amount,
+        }) => {
+            let config: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
+            if deps.api.addr_canonicalize(info.sender.as_str())? != config.liquidity_token {
+                return Err(ContractError::Unauthorized {});
+            }
+            withdraw_single_liquidity(deps, env, info, asset, cw20_msg.amount, min_out_amount)
         }
         Ok(Cw20HookMsg::WithdrawLiquidity {}) => {
             let config: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
@@ -205,8 +225,8 @@ pub fn provide_liquidity(
     deps: DepsMut,
     env: Env,
     info: MessageInfo,
-    assets: [Asset; 2],
-    slippage_tolerance: Option<Decimal>,
+    assets: Vec<Asset>,
+    min_out_amount: Uint128,
     receiver: Option<String>,
 ) -> Result<Response, ContractError> {
     for asset in assets.iter() {
@@ -214,20 +234,26 @@ pub fn provide_liquidity(
     }
 
     let pair_info: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
-    let mut pools: [Asset; 2] =
+    let mut pools: Vec<Asset> =
         pair_info.query_pools(&deps.querier, deps.api, env.contract.address.clone())?;
-    let deposits: [Uint128; 2] = [
-        assets
-            .iter()
-            .find(|a| a.info.equal(&pools[0].info))
-            .map(|a| a.amount)
-            .expect("Wrong asset info is given"),
-        assets
-            .iter()
-            .find(|a| a.info.equal(&pools[1].info))
-            .map(|a| a.amount)
-            .expect("Wrong asset info is given"),
-    ];
+
+    let mut deposits = Vec::with_capacity(pools.len());
+    for (i, asset) in assets.iter().enumerate() {
+        assert_eq!(asset.info, pools[i].info);
+        deposits.push(asset.amount);
+    }
+    // let deposits: [Uint128; 2] = [
+    //     assets
+    //         .iter()
+    //         .find(|a| a.info.equal(&pools[0].info))
+    //         .map(|a| a.amount)
+    //         .expect("Wrong asset info is given"),
+    //     assets
+    //         .iter()
+    //         .find(|a| a.info.equal(&pools[1].info))
+    //         .map(|a| a.amount)
+    //         .expect("Wrong asset info is given"),
+    // ];
 
     let mut messages: Vec<CosmosMsg> = vec![];
     for (i, pool) in pools.iter_mut().enumerate() {
@@ -250,26 +276,30 @@ pub fn provide_liquidity(
     }
 
     // assert slippage tolerance
-    assert_slippage_tolerance(&slippage_tolerance, &deposits, &pools)?;
+    // assert_slippage_tolerance(&slippage_tolerance, &deposits, &pools)?;
 
     let liquidity_token = deps.api.addr_humanize(&pair_info.liquidity_token)?;
     let total_share = query_supply(&deps.querier, liquidity_token)?;
-    let old_token_0 = pools[0].amount.u128();
-    let old_token_1 = pools[1].amount.u128();
-    let new_token_0 = old_token_0.checked_add(deposits[0].u128()).unwrap();
-    let new_token_1 = old_token_1.checked_add(deposits[1].u128()).unwrap();
+
+    let mut old_balances = Vec::with_capacity(pools.len());
+    let mut new_balances = Vec::with_capacity(pools.len());
+    for (i, pool) in pools.iter().enumerate() {
+        let pool_balance = pool.amount.u128();
+        old_balances.push(pool_balance);
+        new_balances.push(pool_balance.checked_add(deposits[i].u128()).unwrap());
+    }
 
     // TODO find better way for type conversion
     let mint_amount = Curve {
-        amp: AMPLIFICATION,
-        fee_numerator: FEE_NUMERATOR,
+        amp: pair_info.amplification.u128() as u64,
+        fee_numerator: pair_info.fee.u128() as u64,
     }
-    .deposit(
-        &[old_token_0, old_token_1],
-        &[new_token_0, new_token_1],
-        total_share.u128() as u64,
-    )
+    .deposit(&old_balances, &new_balances, total_share.u128() as u64)
     .unwrap();
+
+    if mint_amount < min_out_amount.u128() as u64 {
+        return Err(ContractError::MaxSlippageAssertion {});
+    }
 
     let share = Uint128::from(mint_amount as u128);
 
@@ -292,11 +322,15 @@ pub fn provide_liquidity(
         funds: vec![],
     }));
 
+    // let mut assets_msg = "";
+    // for asset in assets.iter() {
+    //     assets_msg = sformat!("{} {}", assets_msg, asset);
+    // }
     Ok(Response::new().add_messages(messages).add_attributes(vec![
         ("action", "provide_liquidity"),
         ("sender", info.sender.as_str()),
         ("receiver", receiver.as_str()),
-        ("assets", &format!("{}, {}", assets[0], assets[1])),
+        // ("assets", assets_msg),
         ("share", &share.to_string()),
     ]))
 }
@@ -311,7 +345,7 @@ pub fn withdraw_liquidity(
     let pair_info: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
     let liquidity_addr: Addr = deps.api.addr_humanize(&pair_info.liquidity_token)?;
 
-    let pools: [Asset; 2] = pair_info.query_pools(&deps.querier, deps.api, env.contract.address)?;
+    let pools: Vec<Asset> = pair_info.query_pools(&deps.querier, deps.api, env.contract.address)?;
     let total_share: Uint128 = query_supply(&deps.querier, liquidity_addr)?;
 
     let share_ratio: Decimal = Decimal::from_ratio(amount, total_share);
@@ -323,33 +357,32 @@ pub fn withdraw_liquidity(
         })
         .collect();
 
+    let mut refund_assets_msg: Vec<CosmosMsg> = refund_assets
+        .iter()
+        .map(|a| a.clone().into_msg(&deps.querier, sender.clone()).unwrap())
+        .collect();
+
+    refund_assets_msg.push(CosmosMsg::Wasm(WasmMsg::Execute {
+        contract_addr: deps
+            .api
+            .addr_humanize(&pair_info.liquidity_token)?
+            .to_string(),
+        msg: to_binary(&Cw20ExecuteMsg::Burn { amount })?,
+        funds: vec![],
+    }));
+
+    // let mut assets_msg = "";
+    // for asset in pools.iter() {
+    //     assets_msg = &format!("{} {}", assets_msg, asset);
+    // }
     // update pool info
     Ok(Response::new()
-        .add_messages(vec![
-            refund_assets[0]
-                .clone()
-                .into_msg(&deps.querier, sender.clone())?,
-            refund_assets[1]
-                .clone()
-                .into_msg(&deps.querier, sender.clone())?,
-            // burn liquidity token
-            CosmosMsg::Wasm(WasmMsg::Execute {
-                contract_addr: deps
-                    .api
-                    .addr_humanize(&pair_info.liquidity_token)?
-                    .to_string(),
-                msg: to_binary(&Cw20ExecuteMsg::Burn { amount })?,
-                funds: vec![],
-            }),
-        ])
+        .add_messages(refund_assets_msg)
         .add_attributes(vec![
             ("action", "withdraw_liquidity"),
             ("sender", sender.as_str()),
             ("withdrawn_share", &amount.to_string()),
-            (
-                "refund_assets",
-                &format!("{}, {}", refund_assets[0], refund_assets[1]),
-            ),
+            // ("refund_assets", assets_msg),
         ]))
 }
 
@@ -358,36 +391,42 @@ pub fn withdraw_single_liquidity(
     env: Env,
     info: MessageInfo,
     asset: Asset,
-    unmint_amount: u128,
-    min_out_amount: u128,
+    unmint_amount: Uint128,
+    min_out_amount: Uint128,
 ) -> Result<Response, ContractError> {
     let pair_info: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
     let liquidity_addr: Addr = deps.api.addr_humanize(&pair_info.liquidity_token)?;
 
-    let pools: [Asset; 2] = pair_info.query_pools(&deps.querier, deps.api, env.contract.address)?;
+    let pools: Vec<Asset> = pair_info.query_pools(&deps.querier, deps.api, env.contract.address)?;
     let total_share: Uint128 = query_supply(&deps.querier, liquidity_addr)?;
 
     // TODO find better way for type conversion
-    let old_token_0 = pools[0].amount.u128();
-    let old_token_1 = pools[1].amount.u128();
-    let i = if asset.info.equal(&pools[0].info) {
-        0
-    } else {
-        1
-    };
+
+    let old_balances: Vec<u128> = pools.iter().map(|a| a.amount.u128()).collect();
+    let mut i = 0;
+    let mut is_find = false;
+    for (index, pool) in pools.iter().enumerate() {
+        if asset.info.equal(&pool.info) {
+            i = index;
+            is_find = true;
+            break;
+        }
+    }
+    assert_eq!(is_find, true);
+
     let out_amount = Curve {
-        amp: AMPLIFICATION,
-        fee_numerator: FEE_NUMERATOR,
+        amp: pair_info.amplification.u128() as u64,
+        fee_numerator: pair_info.fee.u128() as u64,
     }
     .remove_liquidity_single_token(
-        &[old_token_0, old_token_1],
-        unmint_amount as u64,
-        i,
+        &old_balances,
+        unmint_amount.u128() as u64,
+        i as u8,
         total_share.u128() as u64,
     )
     .unwrap();
 
-    assert_eq!(out_amount > min_out_amount as u64, true);
+    assert_eq!(out_amount > min_out_amount.u128() as u64, true);
 
     let refund_asset = Asset {
         info: pools[i as usize].info.clone(),
@@ -427,6 +466,7 @@ pub fn swap(
     info: MessageInfo,
     sender: Addr,
     offer_asset: Asset,
+    ask_asset: Asset,
     min_out_amount: Uint128,
     to: Option<Addr>,
 ) -> Result<Response, ContractError> {
@@ -434,31 +474,62 @@ pub fn swap(
 
     let pair_info: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
 
-    let pools: [Asset; 2] = pair_info.query_pools(&deps.querier, deps.api, env.contract.address)?;
+    let pools: Vec<Asset> = pair_info.query_pools(&deps.querier, deps.api, env.contract.address)?;
 
-    let offer_pool: Asset;
-    let ask_pool: Asset;
+    // let offer_pool: Asset;
+    // let ask_pool: Asset;
 
     // If the asset balance is already increased
     // To calculated properly we should subtract user deposit from the pool
-    if offer_asset.info.equal(&pools[0].info) {
-        offer_pool = Asset {
-            amount: pools[0].amount.checked_sub(offer_asset.amount)?,
-            info: pools[0].info.clone(),
-        };
-        ask_pool = pools[1].clone();
-    } else if offer_asset.info.equal(&pools[1].info) {
-        offer_pool = Asset {
-            amount: pools[1].amount.checked_sub(offer_asset.amount)?,
-            info: pools[1].info.clone(),
-        };
-        ask_pool = pools[0].clone();
-    } else {
-        return Err(ContractError::AssetMismatch {});
-    }
+    // if offer_asset.info.equal(&pools[0].info) {
+    //     offer_pool = Asset {
+    //         amount: pools[0].amount.checked_sub(offer_asset.amount)?,
+    //         info: pools[0].info.clone(),
+    //     };
+    //     ask_pool = pools[1].clone();
+    // } else if offer_asset.info.equal(&pools[1].info) {
+    //     offer_pool = Asset {
+    //         amount: pools[1].amount.checked_sub(offer_asset.amount)?,
+    //         info: pools[1].info.clone(),
+    //     };
+    //     ask_pool = pools[0].clone();
+    // } else {
+    //     return Err(ContractError::AssetMismatch {});
+    // }
 
     let offer_amount = offer_asset.amount;
-    let return_amount = compute_swap(offer_pool.amount, ask_pool.amount, offer_amount);
+    let mut i = 0;
+    let mut j = 0;
+    // let mut offer_pool: Asset;
+    let mut ask_pool = pools[0].clone();
+    let mut balances = Vec::with_capacity(pools.len());
+    for (index, pool) in pools.iter().enumerate() {
+        if offer_asset.info.equal(&pool.info) {
+            i = index;
+            let amount = pool.amount.checked_sub(offer_asset.amount)?;
+            // offer_pool = Asset {
+            //     amount: amount,
+            //     info: pool.info.clone(),
+            // };
+            balances.push(amount.u128());
+            continue;
+        }
+        if ask_asset.info.equal(&pool.info) {
+            j = index;
+            ask_pool = pool.clone();
+        }
+        balances.push(pool.amount.u128());
+    }
+    let out_amount = Curve {
+        amp: pair_info.amplification.u128() as u64,
+        fee_numerator: pair_info.fee.u128() as u64,
+    }
+    .exchange(i, j, offer_amount.u128() as u64, &balances)
+    .unwrap();
+    let return_amount = Uint128::from(out_amount);
+
+    // let return_amount = compute_swap(offer_pool.amount, ask_pool.amount, offer_amount);
+
     assert_eq!(return_amount.u128() > min_out_amount.u128(), true);
     // check max spread limit if exist
     // compute tax
@@ -490,12 +561,12 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> Result<Binary, ContractErr
     match msg {
         QueryMsg::Pair {} => Ok(to_binary(&query_pair_info(deps)?)?),
         QueryMsg::Pool {} => Ok(to_binary(&query_pool(deps)?)?),
-        QueryMsg::Simulation { offer_asset } => {
-            Ok(to_binary(&query_simulation(deps, offer_asset)?)?)
-        }
-        QueryMsg::ReverseSimulation { ask_asset } => {
-            Ok(to_binary(&query_reverse_simulation(deps, ask_asset)?)?)
-        }
+        // QueryMsg::Simulation { offer_asset } => {
+        //     Ok(to_binary(&query_simulation(deps, offer_asset)?)?)
+        // }
+        // QueryMsg::ReverseSimulation { ask_asset } => {
+        //     Ok(to_binary(&query_reverse_simulation(deps, ask_asset)?)?)
+        // }
     }
 }
 
@@ -509,7 +580,7 @@ pub fn query_pair_info(deps: Deps) -> Result<PairInfo, ContractError> {
 pub fn query_pool(deps: Deps) -> Result<PoolResponse, ContractError> {
     let pair_info: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
     let contract_addr = deps.api.addr_humanize(&pair_info.contract_addr)?;
-    let assets: [Asset; 2] = pair_info.query_pools(&deps.querier, deps.api, contract_addr)?;
+    let assets: Vec<Asset> = pair_info.query_pools(&deps.querier, deps.api, contract_addr)?;
     let total_share: Uint128 = query_supply(
         &deps.querier,
         deps.api.addr_humanize(&pair_info.liquidity_token)?,
@@ -523,57 +594,57 @@ pub fn query_pool(deps: Deps) -> Result<PoolResponse, ContractError> {
     Ok(resp)
 }
 
-pub fn query_simulation(
-    deps: Deps,
-    offer_asset: Asset,
-) -> Result<SimulationResponse, ContractError> {
-    let pair_info: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
+// pub fn query_simulation(
+//     deps: Deps,
+//     offer_asset: Asset,
+// ) -> Result<SimulationResponse, ContractError> {
+//     let pair_info: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
 
-    let contract_addr = deps.api.addr_humanize(&pair_info.contract_addr)?;
-    let pools: [Asset; 2] = pair_info.query_pools(&deps.querier, deps.api, contract_addr)?;
+//     let contract_addr = deps.api.addr_humanize(&pair_info.contract_addr)?;
+//     let pools: Vec<Asset> = pair_info.query_pools(&deps.querier, deps.api, contract_addr)?;
 
-    let offer_pool: Asset;
-    let ask_pool: Asset;
-    if offer_asset.info.equal(&pools[0].info) {
-        offer_pool = pools[0].clone();
-        ask_pool = pools[1].clone();
-    } else if offer_asset.info.equal(&pools[1].info) {
-        offer_pool = pools[1].clone();
-        ask_pool = pools[0].clone();
-    } else {
-        return Err(ContractError::AssetMismatch {});
-    }
+//     let offer_pool: Asset;
+//     let ask_pool: Asset;
+//     if offer_asset.info.equal(&pools[0].info) {
+//         offer_pool = pools[0].clone();
+//         ask_pool = pools[1].clone();
+//     } else if offer_asset.info.equal(&pools[1].info) {
+//         offer_pool = pools[1].clone();
+//         ask_pool = pools[0].clone();
+//     } else {
+//         return Err(ContractError::AssetMismatch {});
+//     }
 
-    let return_amount = compute_swap(offer_pool.amount, ask_pool.amount, offer_asset.amount);
+//     let return_amount = compute_swap(offer_pool.amount, ask_pool.amount, offer_asset.amount);
 
-    Ok(SimulationResponse { return_amount })
-}
+//     Ok(SimulationResponse { return_amount })
+// }
 
-pub fn query_reverse_simulation(
-    deps: Deps,
-    ask_asset: Asset,
-) -> Result<ReverseSimulationResponse, ContractError> {
-    let pair_info: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
+// pub fn query_reverse_simulation(
+//     deps: Deps,
+//     ask_asset: Asset,
+// ) -> Result<ReverseSimulationResponse, ContractError> {
+//     let pair_info: PairInfoRaw = PAIR_INFO.load(deps.storage)?;
 
-    let contract_addr = deps.api.addr_humanize(&pair_info.contract_addr)?;
-    let pools: [Asset; 2] = pair_info.query_pools(&deps.querier, deps.api, contract_addr)?;
+//     let contract_addr = deps.api.addr_humanize(&pair_info.contract_addr)?;
+//     let pools: [Asset; 2] = pair_info.query_pools(&deps.querier, deps.api, contract_addr)?;
 
-    let offer_pool: Asset;
-    let ask_pool: Asset;
-    if ask_asset.info.equal(&pools[0].info) {
-        ask_pool = pools[0].clone();
-        offer_pool = pools[1].clone();
-    } else if ask_asset.info.equal(&pools[1].info) {
-        ask_pool = pools[1].clone();
-        offer_pool = pools[0].clone();
-    } else {
-        return Err(ContractError::AssetMismatch {});
-    }
+//     let offer_pool: Asset;
+//     let ask_pool: Asset;
+//     if ask_asset.info.equal(&pools[0].info) {
+//         ask_pool = pools[0].clone();
+//         offer_pool = pools[1].clone();
+//     } else if ask_asset.info.equal(&pools[1].info) {
+//         ask_pool = pools[1].clone();
+//         offer_pool = pools[0].clone();
+//     } else {
+//         return Err(ContractError::AssetMismatch {});
+//     }
 
-    let offer_amount = compute_swap(offer_pool.amount, ask_pool.amount, ask_asset.amount);
+//     let offer_amount = compute_swap(offer_pool.amount, ask_pool.amount, ask_asset.amount);
 
-    Ok(ReverseSimulationResponse { offer_amount })
-}
+//     Ok(ReverseSimulationResponse { offer_amount })
+// }
 
 pub fn amount_of(coins: &[Coin], denom: String) -> Uint128 {
     match coins.iter().find(|x| x.denom == denom) {
@@ -582,99 +653,20 @@ pub fn amount_of(coins: &[Coin], denom: String) -> Uint128 {
     }
 }
 
-fn compute_swap(offer_pool: Uint128, ask_pool: Uint128, offer_amount: Uint128) -> Uint128 {
-    let out_amount = Curve {
-        amp: AMPLIFICATION,
-        fee_numerator: FEE_NUMERATOR,
-    }
-    .exchange(
-        0,
-        1,
-        offer_amount.u128() as u64,
-        &[offer_pool.u128(), ask_pool.u128()],
-    )
-    .unwrap();
-    Uint128::from(out_amount)
-}
-
-#[test]
-fn test_compute_swap_with_huge_pool_variance() {
-    let offer_pool = Uint128::from(395451850234u128);
-    let ask_pool = Uint128::from(317u128);
-
-    assert_eq!(
-        compute_swap(offer_pool, ask_pool, Uint128::from(1u128)),
-        Uint128::zero()
-    );
-}
-
-/// If `belief_price` and `max_spread` both are given,
-/// we compute new spread else we just use terraswap
-/// spread to check `max_spread`
-pub fn assert_max_spread(
-    belief_price: Option<Decimal>,
-    max_spread: Option<Decimal>,
-    offer_amount: Uint128,
-    return_amount: Uint128,
-    spread_amount: Uint128,
-) -> Result<(), ContractError> {
-    let offer_amount: Uint256 = offer_amount.into();
-    let return_amount: Uint256 = return_amount.into();
-    let spread_amount: Uint256 = spread_amount.into();
-
-    if let (Some(max_spread), Some(belief_price)) = (max_spread, belief_price) {
-        let belief_price: Decimal256 = belief_price.into();
-        let max_spread: Decimal256 = max_spread.into();
-
-        let expected_return = offer_amount / belief_price;
-        let spread_amount = if expected_return > return_amount {
-            expected_return - return_amount
-        } else {
-            Uint256::zero()
-        };
-
-        if return_amount < expected_return
-            && Decimal256::from_ratio(spread_amount, expected_return) > max_spread
-        {
-            return Err(ContractError::MaxSpreadAssertion {});
-        }
-    } else if let Some(max_spread) = max_spread {
-        let max_spread: Decimal256 = max_spread.into();
-        if Decimal256::from_ratio(spread_amount, return_amount + spread_amount) > max_spread {
-            return Err(ContractError::MaxSpreadAssertion {});
-        }
-    }
-
-    Ok(())
-}
-
-fn assert_slippage_tolerance(
-    slippage_tolerance: &Option<Decimal>,
-    deposits: &[Uint128; 2],
-    pools: &[Asset; 2],
-) -> Result<(), ContractError> {
-    if let Some(slippage_tolerance) = *slippage_tolerance {
-        let slippage_tolerance: Decimal256 = slippage_tolerance.into();
-        if slippage_tolerance > Decimal256::one() {
-            return Err(StdError::generic_err("slippage_tolerance cannot bigger than 1").into());
-        }
-
-        let one_minus_slippage_tolerance = Decimal256::one() - slippage_tolerance;
-        let deposits: [Uint256; 2] = [deposits[0].into(), deposits[1].into()];
-        let pools: [Uint256; 2] = [pools[0].amount.into(), pools[1].amount.into()];
-
-        // Ensure each prices are not dropped as much as slippage tolerance rate
-        if Decimal256::from_ratio(deposits[0], deposits[1]) * one_minus_slippage_tolerance
-            > Decimal256::from_ratio(pools[0], pools[1])
-            || Decimal256::from_ratio(deposits[1], deposits[0]) * one_minus_slippage_tolerance
-                > Decimal256::from_ratio(pools[1], pools[0])
-        {
-            return Err(ContractError::MaxSlippageAssertion {});
-        }
-    }
-
-    Ok(())
-}
+// fn compute_swap(offer_pool: Uint128, ask_pool: Uint128, offer_amount: Uint128) -> Uint128 {
+//     let out_amount = Curve {
+//         amp: AMPLIFICATION,
+//         fee_numerator: FEE_NUMERATOR,
+//     }
+//     .exchange(
+//         0,
+//         1,
+//         offer_amount.u128() as u64,
+//         &[offer_pool.u128(), ask_pool.u128()],
+//     )
+//     .unwrap();
+//     Uint128::from(out_amount)
+// }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(_deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {

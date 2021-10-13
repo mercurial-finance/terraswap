@@ -1,3 +1,4 @@
+use cosmwasm_std::Uint128;
 use cw_storage_plus::Item;
 use terraswap::asset::PairInfoRaw;
 
@@ -27,7 +28,7 @@ mod test {
         store_pair_info(
             &mut deps.storage,
             &PairInfoRaw {
-                asset_infos: [
+                asset_infos: vec![
                     AssetInfoRaw::NativeToken {
                         denom: "uusd".to_string(),
                     },
@@ -35,6 +36,8 @@ mod test {
                         contract_addr: deps.api.addr_canonicalize("token0000").unwrap(),
                     },
                 ],
+                amplification: Uint128::from(60u128),
+                fee: Uint128::from(4u128),
                 contract_addr: deps.api.addr_canonicalize("pair0000").unwrap(),
                 liquidity_token: deps.api.addr_canonicalize("liquidity0000").unwrap(),
             },
